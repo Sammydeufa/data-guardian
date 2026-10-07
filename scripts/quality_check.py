@@ -1,107 +1,82 @@
-# ================================================
-# DATA GUARDIAN - SCRIPT 2 : ANALYSE QUALITÉ
-# ================================================
+"""
+Étape 2 : Analyse de la qualité des données
+On lit la table clients et on cherche les problèmes :
+- valeurs manquantes par colonne
+- lignes dupliquées
+On calcule un score global et on sauvegarde le rapport.
+"""
 
 import pandas as pd
+import json
 from sqlalchemy import create_engine
+from datetime import datetime
 from dotenv import load_dotenv
 import os
-import json
-from datetime import datetime
 
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
+load_dotenv()
 
 DB_URL = f"mysql+pymysql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
 engine = create_engine(DB_URL)
 
-print("=" * 55)
-print("  DATA GUARDIAN - Analyse Qualité des Données")
-print("=" * 55)
-
 # Lecture des données
+print("Lecture de la table clients...")
 df = pd.read_sql("SELECT * FROM clients", engine)
-print(f"\n📁 Table analysée : clients | {len(df)} lignes | {len(df.columns)} colonnes")
+total = len(df)
+print(f"{total} lignes trouvées")
 
+# --- Analyse des valeurs manquantes ---
+manquants = {}
+for col in df.columns:
+    nb = df[col].isna().sum()
+    if nb > 0:
+        manquants[col] = int(nb)
+
+# --- Détection des doublons ---
+# On considère deux lignes comme doublons si même prénom + nom + email
+nb_doublons = int(df.duplicated(subset=["prenom", "nom", "email"]).sum())
+
+# --- Calcul du score de qualité ---
+# Formule simple : on pénalise chaque anomalie trouvée
+total_anomalies = sum(manquants.values()) + nb_doublons
+score = max(0, round(100 - (total_anomalies / total * 100), 1))
+
+# Niveau de santé
+if score >= 95:
+    niveau = "🟢 BONNE SANTÉ"
+elif score >= 80:
+    niveau = "🟡 DÉGRADÉE"
+else:
+    niveau = "🔴 CRITIQUE"
+
+# Affichage dans le terminal
+print("\n--- Rapport de qualité ---")
+print(f"Score global : {niveau} ({score}%)")
+print(f"Valeurs manquantes : {manquants}")
+print(f"Doublons détectés : {nb_doublons}")
+
+# --- Sauvegarde du rapport ---
 rapport = {
-    "date_analyse": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    "total_lignes": len(df),
-    "total_colonnes": len(df.columns),
-    "anomalies": []
+    "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    "total_lignes": total,
+    "score": score,
+    "niveau": niveau,
+    "manquants": manquants,
+    "doublons": nb_doublons
 }
 
-# ── 1. VALEURS MANQUANTES ──
-print("\n📊 ANALYSE 1 : Valeurs manquantes")
-print("-" * 40)
-missing = df.isnull().sum()
-missing_pct = (missing / len(df) * 100).round(2)
-has_missing = False
-for col in df.columns:
-    if missing[col] > 0:
-        has_missing = True
-        niveau = "🔴 CRITIQUE" if missing_pct[col] > 10 else "🟡 ATTENTION"
-        print(f"  {niveau} | {col} : {missing[col]} manquantes ({missing_pct[col]}%)")
-        rapport["anomalies"].append({
-            "type": "Valeurs manquantes",
-            "colonne": col,
-            "valeur": f"{missing[col]} ({missing_pct[col]}%)",
-            "niveau": "CRITIQUE" if missing_pct[col] > 10 else "ATTENTION"
-        })
-if not has_missing:
-    print("  ✅ Aucune valeur manquante détectée")
-
-# ── 2. DOUBLONS ──
-print("\n📊 ANALYSE 2 : Doublons")
-print("-" * 40)
-doublons = df.duplicated().sum()
-doublons_pct = round(doublons / len(df) * 100, 2)
-if doublons > 0:
-    niveau = "🔴 CRITIQUE" if doublons_pct > 5 else "🟡 ATTENTION"
-    print(f"  {niveau} | {doublons} lignes dupliquées ({doublons_pct}%)")
-    rapport["anomalies"].append({
-        "type": "Doublons",
-        "colonne": "Toutes",
-        "valeur": f"{doublons} ({doublons_pct}%)",
-        "niveau": "CRITIQUE" if doublons_pct > 5 else "ATTENTION"
-    })
-else:
-    print("  ✅ Aucun doublon détecté")
-
-# ── 3. SCORE GLOBAL ──
-print("\n📊 SCORE GLOBAL DE QUALITÉ")
-print("-" * 40)
-total_cells = len(df) * len(df.columns)
-missing_cells = df.isnull().sum().sum()
-doublon_cells = doublons * len(df.columns)
-score = round((1 - (missing_cells + doublon_cells) / total_cells) * 100, 2)
-score = max(0, min(100, score))
-
-rapport["score_qualite"] = score
-rapport["nb_anomalies"] = len(rapport["anomalies"])
-
-if score >= 95:
-    emoji = "🟢"
-    statut = "BONNE SANTÉ"
-elif score >= 80:
-    emoji = "🟡"
-    statut = "DÉGRADÉE"
-else:
-    emoji = "🔴"
-    statut = "CRITIQUE"
-
-print(f"  {emoji} Score : {score}% — {statut}")
-print(f"  📌 {len(rapport['anomalies'])} anomalie(s) détectée(s)")
-
-# ── 4. SAUVEGARDE DU RAPPORT ──
-rapport_df = pd.DataFrame(rapport["anomalies"]) if rapport["anomalies"] else pd.DataFrame(
-    columns=["type", "colonne", "valeur", "niveau"])
-rapport_df["date_analyse"] = rapport["date_analyse"]
-rapport_df["score_qualite"] = score
-rapport_df.to_sql("rapports_qualite", engine, if_exists="replace", index=False)
-
-# Sauvegarde JSON
-rapport_path = os.path.join(os.path.dirname(__file__), '..', 'rapport.json')
-with open(rapport_path, 'w', encoding='utf-8') as f:
+# En JSON (pour l'agent IA)
+with open("rapport.json", "w") as f:
     json.dump(rapport, f, ensure_ascii=False, indent=2)
 
-print(f"\n✅ Rapport sauvegardé dans MySQL (table 'rapports_qualite') et rapport.json")
-print("\n🎉 Étape 2 terminée ! Lance maintenant : python scripts/ai_agent.py")
+# En base MySQL (pour l'historique)
+rapport_df = pd.DataFrame([{
+    "date_analyse": rapport["date"],
+    "total_lignes": total,
+    "score": score,
+    "niveau": niveau,
+    "nb_manquants": sum(manquants.values()),
+    "nb_doublons": nb_doublons
+}])
+rapport_df.to_sql("rapports_qualite", engine, if_exists="append", index=False)
+
+print("\n✅ Rapport sauvegardé dans rapport.json et dans MySQL")

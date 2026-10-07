@@ -1,69 +1,54 @@
-# ================================================
-# DATA GUARDIAN - SCRIPT 1 : CHARGEMENT DES DONNÉES
-# ================================================
+"""
+Étape 1 : Chargement des données clients dans MySQL
+On télécharge un dataset public de 100 000 clients et on injecte
+quelques anomalies pour simuler des données réelles imparfaites.
+"""
 
 import pandas as pd
-from sqlalchemy import create_engine
+import numpy as np
+from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 import os
 
-# Charger les variables du fichier .env
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
+load_dotenv()
 
+# Connexion à la base de données
 DB_URL = f"mysql+pymysql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
+engine = create_engine(DB_URL)
 
-print("=" * 50)
-print("  DATA GUARDIAN - Chargement des données")
-print("=" * 50)
-
-# Connexion MySQL
-try:
-    engine = create_engine(DB_URL)
-    conn = engine.connect()
-    print("✅ Connexion MySQL réussie !")
-    conn.close()
-except Exception as e:
-    print(f"❌ Erreur de connexion : {e}")
-    exit()
-
-# Téléchargement du dataset
-print("\n⏳ Téléchargement du dataset clients...")
+# Téléchargement du dataset (100 000 lignes de clients fictifs)
+print("Téléchargement du dataset...")
 url = "https://raw.githubusercontent.com/datablist/sample-csv-files/main/files/customers/customers-100000.csv"
+df = pd.read_csv(url)
 
-try:
-    df = pd.read_csv(url)
-    print(f"✅ Dataset chargé : {len(df)} lignes | {len(df.columns)} colonnes")
-    print(f"\n📋 Colonnes disponibles : {list(df.columns)}")
-    print(f"\n🔍 Aperçu des données :")
-    print(df.head(3).to_string())
-except Exception as e:
-    print(f"❌ Erreur chargement dataset : {e}")
-    exit()
+# On garde seulement les colonnes utiles
+df = df[["Index", "First Name", "Last Name", "Email", "Phone", "Company", "Country"]].copy()
+df.columns = ["id", "prenom", "nom", "email", "telephone", "entreprise", "pays"]
 
-# Injection de quelques anomalies pour rendre le projet réaliste
-print("\n⚙️  Injection d'anomalies simulées pour le projet...")
-import numpy as np
-np.random.seed(42)
+print(f"Dataset chargé : {len(df)} lignes")
 
-# 5% de valeurs manquantes sur Email
-mask_email = np.random.choice(df.index, size=int(len(df) * 0.05), replace=False)
-df.loc[mask_email, 'Email'] = np.nan
+# --- Injection d'anomalies réalistes ---
 
-# 3% de doublons
-doublons = df.sample(int(len(df) * 0.03))
+# 5% d'emails manquants (erreur de saisie fréquente)
+nb_emails = int(len(df) * 0.05)
+idx_emails = np.random.choice(df.index, nb_emails, replace=False)
+df.loc[idx_emails, "email"] = None
+
+# 2% de prénoms manquants
+nb_prenoms = int(len(df) * 0.02)
+idx_prenoms = np.random.choice(df.index, nb_prenoms, replace=False)
+df.loc[idx_prenoms, "prenom"] = None
+
+# 3% de doublons (on copie des lignes existantes)
+nb_doublons = int(len(df) * 0.03)
+doublons = df.sample(nb_doublons)
 df = pd.concat([df, doublons], ignore_index=True)
 
-# 2% de valeurs aberrantes sur le prénom (valeurs vides)
-mask_name = np.random.choice(df.index, size=int(len(df) * 0.02), replace=False)
-df.loc[mask_name, 'First Name'] = np.nan
+print(f"Anomalies injectées : {nb_emails} emails manquants, {nb_prenoms} prénoms manquants, {nb_doublons} doublons")
 
-print(f"✅ Anomalies injectées | Nouveau total : {len(df)} lignes")
+# Chargement dans MySQL
+print("Chargement dans MySQL...")
+df.to_sql("clients", engine, if_exists="replace", index=False)
 
-# Envoi dans MySQL
-print("\n⏳ Envoi dans MySQL...")
-try:
-    df.to_sql("clients", engine, if_exists="replace", index=False)
-    print(f"✅ Table 'clients' créée dans MySQL avec {len(df)} lignes !")
-    print("\n🎉 Étape 1 terminée avec succès !")
-except Exception as e:
-    print(f"❌ Erreur envoi MySQL : {e}")
+print("✅ Table 'clients' créée avec succès !")
+print(f"   Total lignes : {len(df)}")
