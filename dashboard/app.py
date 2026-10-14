@@ -1,9 +1,11 @@
-"""
-Dashboard Streamlit — Data Guardian
-Visualisation du rapport de qualité + chat IA intégré
-"""
+# ============================================================
+# FICHIER 4 : dashboard/app.py
+# Ce fichier crée un tableau de bord visuel avec Streamlit.
+# Lance-le avec : streamlit run dashboard/app.py
+# Une page web s'ouvre automatiquement sur http://localhost:8501
+# ============================================================
 
-import streamlit as st
+import streamlit as st       # le framework pour créer des pages web en Python
 import pandas as pd
 import json
 from groq import Groq
@@ -13,96 +15,142 @@ import os
 
 load_dotenv()
 
-st.set_page_config(page_title="Data Guardian", page_icon="🛡️", layout="wide")
-st.title("🛡️ Data Guardian — Tableau de bord qualité")
+# ---- CONFIGURATION DE LA PAGE ----
+st.set_page_config(
+    page_title="Data Guardian",
+    page_icon="🛡️",
+    layout="wide"   # la page prend toute la largeur de l'écran
+)
 
-# Connexion MySQL
-DB_URL = f"mysql+pymysql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
+st.title("🛡️ Data Guardian — Tableau de bord qualité des données")
+st.caption("Analyse automatique de la qualité d'une base de données clients")
+
+# ---- CONNEXION À MYSQL ----
+DB_URL = (
+    f"mysql+pymysql://"
+    f"{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}"
+    f"@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}"
+    f"/{os.getenv('DB_NAME')}"
+)
 engine = create_engine(DB_URL)
 
-# Lecture du rapport JSON
+# ---- LECTURE DU RAPPORT ----
+# Si le fichier rapport.json n'existe pas encore, on affiche un message d'erreur
 try:
-    with open("rapport.json", "r") as f:
+    with open("rapport.json", "r", encoding="utf-8") as f:
         rapport = json.load(f)
 except FileNotFoundError:
-    st.error("Rapport introuvable. Lance d'abord quality_check.py")
-    st.stop()
+    st.error("⚠️ Aucun rapport trouvé. Lance d'abord les scripts dans l'ordre :")
+    st.code("python scripts/load_data.py\npython scripts/quality_check.py")
+    st.stop()  # on arrête l'affichage ici si pas de rapport
 
-# --- KPIs ---
-st.subheader("Indicateurs clés")
-col1, col2, col3, col4 = st.columns(4)
+# ---- SECTION 1 : INDICATEURS CLÉS (KPIs) ----
+# Ces 4 chiffres donnent un aperçu rapide de la santé des données
+st.subheader("📊 Résumé de l'analyse")
+st.write(f"Dernière analyse : {rapport['date']}")
 
-col1.metric("Total lignes", f"{rapport['total_lignes']:,}")
-col2.metric("Valeurs manquantes", sum(rapport["manquants"].values()))
-col3.metric("Doublons", rapport["doublons"])
-col4.metric("Score qualité", f"{rapport['score']}%", rapport["niveau"])
+col1, col2, col3, col4 = st.columns(4)  # on divise la page en 4 colonnes
+
+col1.metric(
+    label="Total de lignes",
+    value=f"{rapport['total_lignes']:,}"   # le :, ajoute des espaces (ex: 103 000)
+)
+col2.metric(
+    label="Valeurs manquantes",
+    value=sum(rapport["manquants"].values()),
+    delta="anomalies détectées",
+    delta_color="inverse"  # rouge si > 0
+)
+col3.metric(
+    label="Doublons",
+    value=rapport["doublons"],
+    delta="lignes en double",
+    delta_color="inverse"
+)
+col4.metric(
+    label="Score de qualité",
+    value=f"{rapport['score']}%",
+    delta=rapport["niveau"]
+)
 
 st.divider()
 
-# --- Graphique des anomalies par colonne ---
-st.subheader("Anomalies par colonne")
+# ---- SECTION 2 : GRAPHIQUE DES VALEURS MANQUANTES ----
+st.subheader("📉 Valeurs manquantes par colonne")
 
 if rapport["manquants"]:
-    manquants_df = pd.DataFrame(
-        rapport["manquants"].items(),
-        columns=["Colonne", "Valeurs manquantes"]
+    # On transforme le dictionnaire en tableau pour pouvoir faire un graphique
+    df_manquants = pd.DataFrame(
+        list(rapport["manquants"].items()),   # [ ["email", 5021], ["prenom", 2003] ]
+        columns=["Colonne", "Nb valeurs manquantes"]
     )
-    st.bar_chart(manquants_df.set_index("Colonne"))
+    st.bar_chart(df_manquants.set_index("Colonne"))
 else:
-    st.success("Aucune valeur manquante détectée !")
+    st.success("✅ Aucune valeur manquante dans la base !")
 
 st.divider()
 
-# --- Aperçu des données ---
-st.subheader("Aperçu des données (50 premières lignes)")
-df = pd.read_sql("SELECT * FROM clients LIMIT 50", engine)
-st.dataframe(df, use_container_width=True)
+# ---- SECTION 3 : APERÇU DES DONNÉES ----
+st.subheader("🔍 Aperçu des données (50 premières lignes)")
+
+# On lit les 50 premières lignes de la table clients pour les afficher
+df_apercu = pd.read_sql("SELECT * FROM clients LIMIT 50", engine)
+st.dataframe(df_apercu, use_container_width=True)
 
 st.divider()
 
-# --- Chat IA ---
-st.subheader("💬 Poser une question à l'IA")
+# ---- SECTION 4 : CHAT AVEC L'IA ----
+st.subheader("💬 Poser une question à l'agent IA")
+st.caption("Exemple : Quelles colonnes corriger en priorité ? Que penses-tu du score ?")
 
-contexte = f"""
-Rapport de qualité :
-- Total lignes : {rapport['total_lignes']}
-- Score : {rapport['score']}% ({rapport['niveau']})
+# On prépare le contexte que l'IA va recevoir
+contexte_ia = f"""
+Voici le rapport de qualité des données :
+- Total de lignes : {rapport['total_lignes']}
+- Score de qualité : {rapport['score']}% ({rapport['niveau']})
 - Valeurs manquantes : {rapport['manquants']}
 - Doublons : {rapport['doublons']}
 """
 
-# Initialisation de l'historique de chat
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# Streamlit garde en mémoire les messages pendant toute la session
+if "historique_chat" not in st.session_state:
+    st.session_state.historique_chat = []
 
-# Affichage des messages précédents
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.write(msg["content"])
+# On affiche les messages précédents
+for message in st.session_state.historique_chat:
+    with st.chat_message(message["role"]):
+        st.write(message["content"])
 
-# Champ de saisie
-question = st.chat_input("Ex : Quelles colonnes corriger en priorité ?")
+# Champ où l'utilisateur tape sa question
+question = st.chat_input("Ta question ici...")
 
 if question:
-    st.session_state.messages.append({"role": "user", "content": question})
-
+    # On affiche la question de l'utilisateur
     with st.chat_message("user"):
         st.write(question)
 
-    # Appel Groq
+    # On l'ajoute à l'historique
+    st.session_state.historique_chat.append({"role": "user", "content": question})
+
+    # On appelle l'IA via Groq
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
     reponse = client.chat.completions.create(
         model="llama3-70b-8192",
         messages=[
-            {"role": "system", "content": "Tu es un assistant qualité des données. Réponds en français.\n" + contexte},
-            *st.session_state.messages
+            {
+                "role": "system",
+                "content": "Tu es un assistant qualité des données. Réponds en français, simplement.\n" + contexte_ia
+            },
+            *st.session_state.historique_chat  # on envoie tout l'historique pour que l'IA se souvienne
         ],
-        temperature=0.5
+        temperature=0.4
     )
 
     texte = reponse.choices[0].message.content
-    st.session_state.messages.append({"role": "assistant", "content": texte})
 
+    # On affiche et sauvegarde la réponse
     with st.chat_message("assistant"):
         st.write(texte)
+
+    st.session_state.historique_chat.append({"role": "assistant", "content": texte})
