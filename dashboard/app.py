@@ -136,7 +136,7 @@ if question:
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
     reponse = client.chat.completions.create(
-        model="llama3-70b-8192",
+        model="qwen/qwen3.8-27b",
         messages=[
             {
                 "role": "system",
