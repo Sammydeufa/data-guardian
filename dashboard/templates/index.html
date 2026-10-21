@@ -505,6 +505,9 @@
       <div class="nav-item" onclick="showSection('chat', event)">
         <span class="nav-icon">◎</span> Assistant IA
       </div>
+      <div class="nav-item" onclick="showSection('restaurant', event)">
+        <span class="nav-icon">🍔</span> Restaurants
+      </div>
     </nav>
     <div class="sidebar-footer">
       <div class="footer-label">MSc2 Data Management<br>Aivancity · 2026</div>
@@ -623,6 +626,56 @@
       </div>
     </div>
 
+    <!-- ═══ SECTION 4 : RESTAURANTS ═══ -->
+    <div class="section" id="section-restaurant">
+
+      <!-- KPI CARDS PAR RESTAURANT -->
+      <div id="resto-cards" style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:20px"></div>
+
+      <!-- GRAPHIQUES -->
+      <div class="two-col" style="margin-bottom:20px">
+        <div class="card">
+          <div class="card-title">Chiffre d'affaires mensuel (€)</div>
+          <canvas id="restoChartCA" height="200"></canvas>
+        </div>
+        <div class="card">
+          <div class="card-title">Marge nette mensuelle (%)</div>
+          <canvas id="restoChartMarge" height="200"></canvas>
+        </div>
+      </div>
+
+      <!-- TABLEAU DÉTAIL -->
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-title" style="margin-bottom:12px">Comparatif KPI — 6 derniers mois</div>
+        <div style="overflow-x:auto">
+          <table id="resto-table" style="width:100%;border-collapse:collapse;font-size:0.82rem">
+            <thead id="resto-thead"></thead>
+            <tbody id="resto-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- CHAT IA RESTAURANT -->
+      <div class="card">
+        <div class="card-title">Assistant IA — Analyse restauration</div>
+        <div class="chat-wrap">
+          <div class="chat-messages" id="resto-chat-messages">
+            <div class="msg">
+              <div class="msg-avatar">◎</div>
+              <div class="msg-bubble">Bonjour ! Je suis branché sur les données des 3 restaurants. Demande-moi une analyse de rentabilité, un comparatif ou une piste d'amélioration.</div>
+            </div>
+          </div>
+          <div class="chat-input-row">
+            <input class="chat-input" id="resto-chat-input" type="text"
+              placeholder="Ex : quel restaurant est le plus rentable ce mois ?"
+              onkeydown="if(event.key==='Enter') sendRestoMessage()"/>
+            <button class="chat-btn" onclick="sendRestoMessage()">Envoyer</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
     <!-- ═══ SECTION 3 : CHAT ═══ -->
     <div class="section" id="section-chat">
       <div class="card">
@@ -730,6 +783,7 @@ function showSection(name, event) {
   document.getElementById('section-' + name).classList.add('active');
   if (event) event.currentTarget.classList.add('active');
   if (name === 'data' && !dataLoaded && rapport) { loadData(); dataLoaded = true; }
+  if (name === 'restaurant' && !restoLoaded) { loadRestaurant(); restoLoaded = true; }
 }
 
 // ── RAPPORT ──
@@ -1008,6 +1062,152 @@ function appendTyping() {
 }
 
 // ── INIT : restaurer l'état si le serveur a déjà une table active ──
+// ══════════════════════════════════════════
+// MODULE RESTAURANT
+// ══════════════════════════════════════════
+let restoCAChart = null, restoMargeChart = null, restoHistorique = [];
+const RESTO_COLORS = ["#22D3EE", "#8B5CF6", "#10B981"];
+
+function fmt€(n) { return new Intl.NumberFormat('fr-FR', {style:'currency', currency:'EUR', maximumFractionDigits:0}).format(n); }
+
+async function loadRestaurant() {
+  try {
+    const [ovRes, evRes] = await Promise.all([
+      fetch('/api/restaurant/overview').then(r => r.json()),
+      fetch('/api/restaurant/evolution').then(r => r.json())
+    ]);
+    renderRestoCards(ovRes);
+    renderRestoCharts(evRes);
+    renderRestoTable(evRes);
+  } catch(e) { console.error('Erreur module restaurant:', e); }
+}
+
+function renderRestoCards(data) {
+  const el = document.getElementById('resto-cards');
+  el.innerHTML = data.map((r, i) => {
+    const color = ['var(--cyan)', 'var(--violet)', 'var(--emerald)'][i];
+    const margeColor = r.marge_pct >= 10 ? 'var(--emerald)' : r.marge_pct >= 7 ? 'var(--amber)' : 'var(--rose)';
+    const foodColor  = r.food_cost_pct <= 31 ? 'var(--emerald)' : r.food_cost_pct <= 33 ? 'var(--amber)' : 'var(--rose)';
+    const laborColor = r.labor_cost_pct <= 28 ? 'var(--emerald)' : r.labor_cost_pct <= 30 ? 'var(--amber)' : 'var(--rose)';
+    return `
+    <div class="card" style="border-top:2px solid ${color};position:relative;overflow:hidden">
+      <div style="font-size:0.75rem;color:var(--text3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">${r.id}</div>
+      <div style="font-size:1rem;font-weight:700;color:var(--text);margin-bottom:14px">${r.nom}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div>
+          <div style="font-size:0.7rem;color:var(--text3)">CA ce mois</div>
+          <div style="font-size:1.1rem;font-weight:700;color:${color}">${fmt€(r.ca_mois)}</div>
+        </div>
+        <div>
+          <div style="font-size:0.7rem;color:var(--text3)">CA 6 mois</div>
+          <div style="font-size:1.1rem;font-weight:700;color:var(--text)">${fmt€(r.ca_total)}</div>
+        </div>
+        <div>
+          <div style="font-size:0.7rem;color:var(--text3)">Marge nette</div>
+          <div style="font-size:1rem;font-weight:600;color:${margeColor}">${r.marge_pct}%</div>
+        </div>
+        <div>
+          <div style="font-size:0.7rem;color:var(--text3)">Food cost</div>
+          <div style="font-size:1rem;font-weight:600;color:${foodColor}">${r.food_cost_pct}%</div>
+        </div>
+        <div>
+          <div style="font-size:0.7rem;color:var(--text3)">Labor cost</div>
+          <div style="font-size:1rem;font-weight:600;color:${laborColor}">${r.labor_cost_pct}%</div>
+        </div>
+        <div>
+          <div style="font-size:0.7rem;color:var(--text3)">Panier moyen</div>
+          <div style="font-size:1rem;font-weight:600;color:var(--text)">${r.panier_moyen}€</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderRestoCharts(ev) {
+  const gridColor = '#1E2D47';
+  const tickOpts  = { color: '#475569', font: { family: 'Space Grotesk', size: 11 } };
+  const baseOpts  = {
+    responsive: true,
+    plugins: { legend: { labels: { color: '#94A3B8', font: { family: 'Space Grotesk', size: 11 } } } },
+    scales: {
+      x: { ticks: tickOpts, grid: { color: gridColor } },
+      y: { ticks: tickOpts, grid: { color: gridColor } }
+    }
+  };
+
+  if (restoCAChart) restoCAChart.destroy();
+  restoCAChart = new Chart(document.getElementById('restoChartCA'), {
+    type: 'bar',
+    data: {
+      labels: ev.mois,
+      datasets: ev.series.map((s, i) => ({
+        label: s.nom, data: s.ca,
+        backgroundColor: RESTO_COLORS[i] + '55',
+        borderColor: RESTO_COLORS[i], borderWidth: 1, borderRadius: 4
+      }))
+    },
+    options: baseOpts
+  });
+
+  if (restoMargeChart) restoMargeChart.destroy();
+  restoMargeChart = new Chart(document.getElementById('restoChartMarge'), {
+    type: 'line',
+    data: {
+      labels: ev.mois,
+      datasets: ev.series.map((s, i) => ({
+        label: s.nom, data: s.marge,
+        borderColor: RESTO_COLORS[i], backgroundColor: RESTO_COLORS[i] + '22',
+        borderWidth: 2, pointRadius: 4, tension: 0.3, fill: true
+      }))
+    },
+    options: { ...baseOpts, plugins: { ...baseOpts.plugins,
+      annotation: { annotations: [{
+        type: 'line', yMin: 8, yMax: 8, borderColor: '#F59E0B',
+        borderWidth: 1, borderDash: [4, 4],
+        label: { content: 'Seuil 8%', display: true, color: '#F59E0B', font: { size: 10 } }
+      }]}
+    }}
+  });
+}
+
+function renderRestoTable(ev) {
+  const thead = document.getElementById('resto-thead');
+  const tbody = document.getElementById('resto-tbody');
+  const th = (t, a='left') => `<th style="padding:8px 10px;color:var(--text3);font-weight:500;font-size:0.75rem;text-align:${a};border-bottom:1px solid var(--border)">${t}</th>`;
+  thead.innerHTML = `<tr>${th('Mois')}${ev.series.map(s => th(s.nom,'right')).join('')}</tr>`;
+  const rows = ev.mois.map((m, i) => {
+    const cells = ev.series.map(s => {
+      const ca = s.ca[i];
+      return `<td style="padding:7px 10px;text-align:right;color:var(--text)">${fmt€(ca)}</td>`;
+    }).join('');
+    return `<tr style="border-bottom:1px solid var(--border)">${
+      `<td style="padding:7px 10px;color:var(--text2);font-weight:500">${m}</td>`}${cells}</tr>`;
+  });
+  tbody.innerHTML = rows.join('');
+}
+
+let restoLoaded = false;
+async function sendRestoMessage() {
+  const input = document.getElementById('resto-chat-input');
+  const q = input.value.trim(); if (!q) return;
+  input.value = '';
+  const msgs = document.getElementById('resto-chat-messages');
+  msgs.innerHTML += `<div class="msg msg-user"><div class="msg-bubble">${q}</div></div>`;
+  msgs.scrollTop = msgs.scrollHeight;
+  restoHistorique.push({ role: 'user', content: q });
+  try {
+    const res = await fetch('/api/restaurant/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q, historique: restoHistorique.slice(-8) })
+    });
+    const d = await res.json();
+    const rep = d.reponse || '...';
+    msgs.innerHTML += `<div class="msg"><div class="msg-avatar">◎</div><div class="msg-bubble">${rep.replace(/\n/g,'<br>')}</div></div>`;
+    restoHistorique.push({ role: 'assistant', content: rep });
+    msgs.scrollTop = msgs.scrollHeight;
+  } catch(e) { msgs.innerHTML += `<div class="msg"><div class="msg-avatar">◎</div><div class="msg-bubble">Erreur de connexion.</div></div>`; }
+}
+
 window.onload = async function() {
   loadDatabases();
   try {

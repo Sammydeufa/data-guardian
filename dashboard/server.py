@@ -11,6 +11,7 @@ import pandas as pd
 import os
 import pathlib
 from datetime import datetime
+import random
 
 env_path = pathlib.Path(__file__).parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
@@ -235,6 +236,127 @@ def modifier_cellule():
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"erreur": str(e)}), 500
+
+# ---- DONNÉES DÉMO RESTAURANTS ----
+def generate_restaurant_data():
+    """Génère 6 mois de données réalistes pour 3 restaurants Burger King."""
+    random.seed(42)
+    restaurants = [
+        {"id": "R1", "nom": "BK Montreuil",  "ouverture": 2019, "places": 80},
+        {"id": "R2", "nom": "BK Villejuif",   "ouverture": 2021, "places": 60},
+        {"id": "R3", "nom": "BK Paris Nation","ouverture": 2017, "places": 95},
+    ]
+    mois = ["Mai", "Juin", "Juil.", "Août", "Sept.", "Oct."]
+    # CA mensuel de base (€) par restaurant
+    ca_base = {"R1": 195000, "R2": 148000, "R3": 232000}
+    # Coefficients saisonniers
+    saison   = [1.0, 1.08, 1.15, 1.12, 0.95, 0.97]
+
+    data = {}
+    for r in restaurants:
+        rid = r["id"]
+        mensuel = []
+        for i, m in enumerate(mois):
+            ca = round(ca_base[rid] * saison[i] * random.uniform(0.97, 1.03))
+            food_cost_pct  = round(random.uniform(28.5, 32.5), 1)   # norme QSR : 28-33%
+            labor_cost_pct = round(random.uniform(26.0, 30.0), 1)   # norme QSR : 26-30%
+            energie_pct    = round(random.uniform(3.5,  5.0),  1)
+            achats         = round(ca * food_cost_pct / 100)
+            masse_sal      = round(ca * labor_cost_pct / 100)
+            energie        = round(ca * energie_pct / 100)
+            autres_charges = round(ca * random.uniform(8, 10) / 100)
+            marge_nette    = ca - achats - masse_sal - energie - autres_charges
+            marge_pct      = round(marge_nette / ca * 100, 1)
+            mensuel.append({
+                "mois": m,
+                "ca": ca,
+                "achats": achats,
+                "masse_salariale": masse_sal,
+                "energie": energie,
+                "autres_charges": autres_charges,
+                "marge_nette": marge_nette,
+                "marge_pct": marge_pct,
+                "food_cost_pct": food_cost_pct,
+                "labor_cost_pct": labor_cost_pct,
+                "tickets": round(ca / random.uniform(11.5, 13.5)),
+            })
+        data[rid] = {**r, "mensuel": mensuel}
+    return data
+
+_resto_data = generate_restaurant_data()
+
+@app.route("/api/restaurant/overview")
+def restaurant_overview():
+    result = []
+    for rid, r in _resto_data.items():
+        tot_ca   = sum(m["ca"]               for m in r["mensuel"])
+        tot_ach  = sum(m["achats"]            for m in r["mensuel"])
+        tot_sal  = sum(m["masse_salariale"]   for m in r["mensuel"])
+        tot_en   = sum(m["energie"]           for m in r["mensuel"])
+        tot_marge= sum(m["marge_nette"]       for m in r["mensuel"])
+        mois_n   = r["mensuel"][-1]  # dernier mois
+        result.append({
+            "id":              rid,
+            "nom":             r["nom"],
+            "ca_total":        tot_ca,
+            "ca_mois":         mois_n["ca"],
+            "marge_pct":       round(tot_marge / tot_ca * 100, 1),
+            "food_cost_pct":   round(tot_ach  / tot_ca * 100, 1),
+            "labor_cost_pct":  round(tot_sal  / tot_ca * 100, 1),
+            "tickets_mois":    mois_n["tickets"],
+            "panier_moyen":    round(mois_n["ca"] / mois_n["tickets"], 2),
+        })
+    return jsonify(result)
+
+@app.route("/api/restaurant/evolution")
+def restaurant_evolution():
+    mois = [m["mois"] for m in list(_resto_data.values())[0]["mensuel"]]
+    series = []
+    for rid, r in _resto_data.items():
+        series.append({
+            "id":    rid,
+            "nom":   r["nom"],
+            "ca":    [m["ca"]         for m in r["mensuel"]],
+            "marge": [m["marge_pct"]  for m in r["mensuel"]],
+            "food":  [m["food_cost_pct"]  for m in r["mensuel"]],
+            "labor": [m["labor_cost_pct"] for m in r["mensuel"]],
+        })
+    return jsonify({"mois": mois, "series": series})
+
+@app.route("/api/restaurant/detail/<rid>")
+def restaurant_detail(rid):
+    if rid not in _resto_data:
+        return jsonify({"erreur": "Restaurant introuvable"}), 404
+    return jsonify(_resto_data[rid])
+
+@app.route("/api/restaurant/chat", methods=["POST"])
+def restaurant_chat():
+    body = request.json
+    question   = body.get("question", "")
+    historique = body.get("historique", [])
+    # Construire un résumé des données pour le contexte IA
+    lignes = []
+    for rid, r in _resto_data.items():
+        m = r["mensuel"]
+        ca_tot = sum(x["ca"] for x in m)
+        marge_moy = round(sum(x["marge_pct"] for x in m) / len(m), 1)
+        food_moy  = round(sum(x["food_cost_pct"] for x in m) / len(m), 1)
+        labor_moy = round(sum(x["labor_cost_pct"] for x in m) / len(m), 1)
+        lignes.append(
+            f"- {r['nom']} : CA 6 mois = {ca_tot:,}€ | marge moy. = {marge_moy}% "
+            f"| food cost = {food_moy}% | labor cost = {labor_moy}%"
+        )
+    contexte = f"""Tu es un analyste de données spécialisé en restauration rapide (QSR).
+Tu assistes le franchisé de 3 restaurants Burger King (Montreuil, Villejuif, Paris Nation).
+Réponds en français, de façon concise et opérationnelle.
+Données des 6 derniers mois :
+{chr(10).join(lignes)}
+Normes secteur QSR France : food cost 28-33%, labor cost 26-30%, marge nette 8-14%.
+"""
+    client   = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    messages = [{"role": "system", "content": contexte}] + historique + [{"role": "user", "content": question}]
+    reponse  = client.chat.completions.create(model="qwen/qwen3.8-27b", messages=messages, temperature=0.4)
+    return jsonify({"reponse": reponse.choices[0].message.content})
 
 # ---- CHAT IA ----
 @app.route("/api/chat", methods=["POST"])
